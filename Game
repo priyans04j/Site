@@ -1,0 +1,361 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  Flame,
+  Wind,
+  Cloud,
+  AlertTriangle,
+  Pickaxe,
+  Shield,
+  Zap,
+  Gem,
+  BookOpen,
+  Droplet,
+  TreePine,
+  Sun,
+  Clock
+} from 'lucide-react';
+
+// Configuration constants
+const GAME_CONFIG = {
+  initialFlameStrength: 100,
+  maxFlameStrength: 100,
+  baseTickRate: 3000, // 3 seconds per game tick
+  maxAbsenceTime: 300, // 5 minutes before significant flame weakening
+  eventProbability: 0.2,
+  resourceGenerationTickRate: 10000, // 10 seconds for resource generation tick
+  stakingGameDuration: 30, // seconds for staking game
+  stakingCost: 3, // fuel cost to start staking
+  stakingTimerTickRate: 1000 // 1 second for staking timer update
+};
+
+const GuardianOfTheLight = () => {
+  // Core Game State
+  const [flameStrength, setFlameStrength] = useState(GAME_CONFIG.initialFlameStrength);
+  const [fuel, setFuel] = useState(10);
+  const [lastActiveTime, setLastActiveTime] = useState(Date.now());
+  const [currentEvent, setCurrentEvent] = useState(null);
+  const [gameLog, setGameLog] = useState([]);
+
+  // New Resource Management
+  const [resources, setResources] = useState({
+    energy: 50,
+    knowledge: 0,
+    water: 20,
+    nature: 10
+  });
+
+  // Upgrade System
+  const [upgrades, setUpgrades] = useState({
+    fuelEfficiency: 1,
+    flameProtection: 0,
+    energyHarvesting: 0,
+    knowledgeResearch: 0
+  });
+
+  // Staking Game State
+  const [stakingGameActive, setStakingGameActive] = useState(false);
+  const [stakingPools, setStakingPools] = useState([]); // Future use for different staking pools
+  const [timeLeft, setTimeLeft] = useState(GAME_CONFIG.stakingGameDuration);
+  const [totalStaked, setTotalStaked] = useState(0); // Future use for tracking staked amount
+  const [stakeResults, setStakeResults] = useState([]);
+  const [stakingIntervalId, setStakingIntervalId] = useState(null); // To manage staking timer interval
+
+  // Utility Functions
+  const addGameLog = (message) => {
+    setGameLog(prevLog => [
+      ...prevLog.slice(-5), // Keep last 5 log entries
+      `[${new Date().toLocaleTimeString()}] ${message}`
+    ]);
+  };
+
+  // Restore Add Fuel Mechanic
+  const addFuel = () => {
+    if (fuel > 0) {
+      const fuelAmount = 20 * upgrades.fuelEfficiency;
+      setFlameStrength(prevStrength =>
+        Math.min(GAME_CONFIG.maxFlameStrength, prevStrength + fuelAmount)
+      );
+      setFuel(prevFuel => prevFuel - 1);
+      addGameLog(`Fuel added. Flame strength increased by ${fuelAmount}`);
+    }
+  };
+
+  // Purchase Upgrade Logic
+  const purchaseUpgrade = (upgradeType) => {
+    const upgradeCosts = {
+      fuelEfficiency: { fuel: 5, energy: 3 },
+      flameProtection: { fuel: 7, knowledge: 4 },
+      energyHarvesting: { water: 5, nature: 3 },
+      knowledgeResearch: { energy: 6, water: 4 }
+    };
+
+    const cost = upgradeCosts[upgradeType];
+    const canAfford = Object.entries(cost).every(([resource, amount]) => {
+      if (resource === 'fuel') return fuel >= amount;
+      return resources[resource] >= amount;
+    });
+
+    if (canAfford) {
+      // Deduct costs
+      Object.entries(cost).forEach(([resource, amount]) => {
+        if (resource === 'fuel') {
+          setFuel(prev => prev - amount);
+        } else {
+          setResources(prev => ({
+            ...prev,
+            [resource]: prev[resource] - amount
+          }));
+        }
+      });
+
+      // Apply upgrade
+      setUpgrades(prev => ({
+        ...prev,
+        [upgradeType]: prev[upgradeType] + 1
+      }));
+
+      addGameLog(`Upgraded ${upgradeType}`);
+    } else {
+      addGameLog(`Not enough resources to upgrade ${upgradeType}`);
+    }
+  };
+
+  // Event and Game Tick Logic
+  const triggerRandomEvent = useCallback(() => {
+    const EVENTS = {
+      WIND: {
+        name: 'Wind',
+        icon: Wind,
+        effect: (strength) => Math.max(0, strength - (10 - upgrades.flameProtection * 2)) // Flame protection reduces event impact
+      },
+      RAIN: {
+        name: 'Rain',
+        icon: Cloud,
+        effect: (strength) => Math.max(0, strength - (15 - upgrades.flameProtection * 3)) // Flame protection reduces event impact
+      },
+      MAGICAL_DISTURBANCE: {
+        name: 'Magical Disturbance',
+        icon: AlertTriangle,
+        effect: (strength) => Math.max(0, strength - (20 - upgrades.flameProtection * 4)) // Flame protection reduces event impact
+      }
+    };
+
+    if (Math.random() < GAME_CONFIG.eventProbability) {
+      const eventKeys = Object.keys(EVENTS);
+      const randomEventKey = eventKeys[Math.floor(Math.random() * eventKeys.length)];
+      const event = EVENTS[randomEventKey];
+
+      setCurrentEvent(event);
+      setFlameStrength(prevStrength => event.effect(prevStrength));
+
+      addGameLog(`${event.name} event occurred!`);
+    } else {
+      setCurrentEvent(null);
+    }
+  }, [upgrades.flameProtection]); // flameProtection dependency added
+
+  // Staking Game Logic
+  const startStakingGame = () => {
+    if (fuel < GAME_CONFIG.stakingCost) {
+      addGameLog('Not enough fuel to start staking game!');
+      return;
+    }
+
+    setStakingGameActive(true);
+    setTimeLeft(GAME_CONFIG.stakingGameDuration);
+    setTotalStaked(0);
+    setStakeResults([]);
+    setFuel(prev => prev - GAME_CONFIG.stakingCost);
+    addGameLog('Staking game started!');
+
+    // Start staking timer
+    const intervalId = setInterval(() => {
+      setTimeLeft(prevTime => {
+        if (prevTime <= 0) {
+          clearInterval(intervalId);
+          setStakingGameActive(false);
+          handleStakingGameEnd();
+          return 0;
+        } else {
+          return prevTime - 1;
+        }
+      });
+    }, GAME_CONFIG.stakingTimerTickRate);
+    setStakingIntervalId(intervalId); // Store interval ID for cleanup
+  };
+
+  const handleStakingGameEnd = () => {
+    const baseReward = 10;
+    const energyReward = baseReward + upgrades.energyHarvesting * 5; // Energy harvesting upgrade bonus
+    const knowledgeReward = baseReward + upgrades.knowledgeResearch * 5; // Knowledge research upgrade bonus
+
+    const rewards = {
+      energy: energyReward,
+      knowledge: knowledgeReward
+    };
+
+    setResources(prevResources => ({
+      energy: prevResources.energy + rewards.energy,
+      knowledge: prevResources.knowledge + rewards.knowledge,
+      water: prevResources.water + 2, // Small water reward for staking
+      nature: prevResources.nature + 1  // Tiny nature reward for staking
+    }));
+
+    addGameLog(`Staking game ended. Received Energy: ${rewards.energy}, Knowledge: ${rewards.knowledge}, Water: 2, Nature: 1`);
+  };
+
+  useEffect(() => {
+    // Resource Generation Timer
+    const resourceInterval = setInterval(() => {
+      setResources(prevResources => ({
+        ...prevResources,
+        energy: Math.min(100, prevResources.energy + 1 + upgrades.energyHarvesting), // Energy generation, capped at 100
+        knowledge: Math.min(100, prevResources.knowledge + upgrades.knowledgeResearch), // Knowledge generation, capped at 100
+        nature: Math.min(100, prevResources.nature + 0.5) // Nature generation, capped at 100
+      }));
+    }, GAME_CONFIG.resourceGenerationTickRate);
+
+    return () => clearInterval(resourceInterval);
+  }, [upgrades.energyHarvesting, upgrades.knowledgeResearch]); // Upgrade dependencies for resource generation
+
+  // Game Loop Effects
+  useEffect(() => {
+    const gameLoop = setInterval(() => {
+      const timeSinceLastActive = (Date.now() - lastActiveTime) / 1000;
+      setLastActiveTime(Date.now()); // Update last active time on each tick
+
+      // Gradually reduce flame if player is absent
+      if (timeSinceLastActive > GAME_CONFIG.maxAbsenceTime) {
+        setFlameStrength(prevStrength => Math.max(0, prevStrength - 5));
+        addGameLog('Flame weakening due to absence');
+      }
+
+      // Trigger random events
+      triggerRandomEvent();
+
+      // Passive flame reduction - reduced by fuelEfficiency
+      setFlameStrength(prevStrength => Math.max(0, prevStrength - (1 - (upgrades.fuelEfficiency -1) * 0.1))); // Fuel efficiency reduces passive loss
+    }, GAME_CONFIG.baseTickRate);
+
+    return () => clearInterval(gameLoop);
+  }, [lastActiveTime, triggerRandomEvent, upgrades.fuelEfficiency]); // fuelEfficiency dependency added
+
+  // Game Over Check
+  useEffect(() => {
+    if (flameStrength <= 0) {
+      addGameLog('The flame has been extinguished. Game Over!');
+      clearInterval(stakingIntervalId); // Clear staking interval if game over during staking
+    }
+  }, [flameStrength, stakingIntervalId]);
+
+  return (
+    <div className="bg-gray-900 text-white p-4 sm:p-6 rounded-lg w-full max-w-4xl mx-auto">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {/* Left Column - Flame and Fuel */}
+        <div className="space-y-4">
+          <div className="bg-gray-800 p-4 rounded">
+            <h2 className="text-xl font-bold mb-2 flex items-center">
+              <Flame className="mr-2" /> Flame Strength
+            </h2>
+            <div className="w-full bg-gray-700 rounded-full h-4 mb-2">
+              <div
+                className="bg-orange-500 h-4 rounded-full"
+                style={{ width: `${flameStrength}%` }}
+              ></div>
+            </div>
+            <div className="flex justify-between items-center">
+              <span>Fuel: {fuel}</span>
+              <button
+                onClick={addFuel}
+                disabled={fuel <= 0}
+                className="bg-blue-500 text-white px-2 py-1 rounded disabled:opacity-50"
+              >
+                Add Fuel
+              </button>
+            </div>
+          </div>
+
+          {/* Resources */}
+          <div className="bg-gray-800 p-4 rounded">
+            <h2 className="text-xl font-bold mb-2">Resources</h2>
+            {Object.entries(resources).map(([resource, value]) => (
+              <div
+                key={resource}
+                className="flex justify-between items-center mb-1"
+              >
+                <span className="capitalize">{resource}</span>
+                <span>{Math.floor(value)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Middle Column - Upgrades and Mini-Game */}
+        <div className="space-y-4">
+          <div className="bg-gray-800 p-4 rounded">
+            <h2 className="text-xl font-bold mb-2">Upgrades</h2>
+            <div className="grid grid-cols-2 gap-2">
+              {Object.keys(upgrades).map(upgrade => (
+                <button
+                  key={upgrade}
+                  onClick={() => purchaseUpgrade(upgrade)}
+                  className="w-full bg-green-500 text-white px-2 py-1 rounded text-sm"
+                >
+                  {upgrade} (Lvl {upgrades[upgrade]})
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Mini-Game Section */}
+          <div className="bg-gray-800 p-4 rounded">
+            <h2 className="text-xl font-bold mb-2 flex items-center">
+              <Pickaxe className="mr-2" /> Staking Game
+            </h2>
+            {stakingGameActive ? (
+              <div>
+                <p className="text-center mb-2">Staking in progress...</p>
+                <p className="text-center mb-2">Time left: {timeLeft} seconds</p>
+                <div className="w-full bg-gray-700 rounded-full h-4">
+                  <div
+                    className="bg-purple-500 h-4 rounded-full"
+                    style={{ width: `${((GAME_CONFIG.stakingGameDuration - timeLeft) / GAME_CONFIG.stakingGameDuration) * 100}%` }}
+                  ></div>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={startStakingGame}
+                disabled={fuel < GAME_CONFIG.stakingCost}
+                className="w-full bg-purple-500 text-white px-4 py-2 rounded flex items-center justify-center disabled:opacity-50"
+              >
+                Start Staking (Cost: {GAME_CONFIG.stakingCost} Fuel)
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Right Column - Game Log and Events */}
+        <div className="space-y-4">
+          {currentEvent && (
+            <div className="bg-yellow-600 p-4 rounded flex items-center">
+              <currentEvent.icon className="mr-2" />
+              <span className="text-sm">{currentEvent.name} Event!</span>
+            </div>
+          )}
+
+          <div className="bg-gray-800 p-4 rounded">
+            <h2 className="text-xl font-bold mb-2">Game Log</h2>
+            <div className="max-h-64 overflow-y-auto">
+              {gameLog.map((log, index) => (
+                <div key={index} className="text-xs sm:text-sm mb-1">{log}</div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default GuardianOfTheLight;
